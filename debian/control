@@ -1,0 +1,22 @@
+Source: libpam-face
+Section: admin
+Priority: optional
+Standards-Version: 3.9.8
+Build-Depends: debhelper (>= 9),
+               dh-python,
+               python (>= 2.7),
+               python-setuptools,
+               bash-completion
+X-Python-Version: >= 2.7
+
+Package: libpam-face
+Depends: ${python:Depends},
+         ${misc:Depends},
+         python-argparse,
+         libpam-python,
+         python-opencv (>= 2.4),
+         opencv-data,
+         bash-completion
+Architecture: all
+Description: Pluggable Authentication Module for face recognition.
+ Only a webcam is required for this module.

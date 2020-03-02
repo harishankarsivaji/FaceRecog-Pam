@@ -1,0 +1,214 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import time
+import argparse
+import os
+import ConfigParser
+import cv2
+
+from pamface import __version__ as VERSION
+from pamface import CONFIG_FILE
+from pamface.facerecognizer import PamFaceRecognizer
+
+class PamFace(object):
+
+    __config = None
+
+    def __init__(self):
+
+        ## Tries to read configuration
+        try:
+            ## Check if file is readable
+            if (os.access(CONFIG_FILE, os.R_OK) == False):
+                raise Exception('The configuration file "' + CONFIG_FILE + '" is not readable!')
+
+            self.__config = ConfigParser.ConfigParser()
+            self.__config.read(CONFIG_FILE)
+
+        except Exception as e:
+            print('[Exception] ' + str(e))
+            exit(1)
+
+    def __showConfirmationDialog(self, question):
+
+        answer = raw_input(question + ' (Y/n)')
+        return (answer in ['y', 'Y', ''])
+
+    def addUser(self, userName, noGui):
+        ## Trains a new face and adds the user to configuration.
+
+        ## Checks if user is root
+        if (os.geteuid() != 0):
+            print('[Error] You need to have root privileges to add a user!')
+            return False
+
+        if (self.__showConfirmationDialog('Are you sure you want to train face of user "' + userName + '"?') == False):
+            print('Adding user canceled.')
+            return False
+
+        try:
+            faceRecognizer = PamFaceRecognizer(self.__config.get('Global', 'Camera'))
+
+            ## Find free label
+            users = self.__config.items('Users')
+
+            ## User already exists?
+            if (self.__config.has_option('Users', userName)):
+                userLabel = int(self.__config.get('Users', userName))
+            else:
+                userLabel = 0
+
+                for c in userName:
+                    userLabel += ord(c)
+
+            print('Using label "{0}"'.format(userLabel))
+            print('Training face ...')
+
+            ## Prepare video device: Capture video for 2 seconds to ensure video
+            ## device can capture proper images
+            for _ in range(20):
+                faces, grayScaleImage = faceRecognizer.detectFaces()
+                face = grayScaleImage
+
+                ## Draw a green rectangle around the faces
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(grayScaleImage, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                    face = face[y:y+h,x:x+w]
+                    ## TODO: Exit here if more than one face was detected
+
+                ## Show captured image
+                if (noGui == False):
+                    faceRecognizer.showImage(grayScaleImage)
+
+            if (len(faces) == 0):
+                raise Exception('No face detected')
+
+            ## Train face
+            faceRecognizer.update([face], [userLabel])
+            cv2.destroyAllWindows()
+
+            ## Adds user to configuration file
+            self.__config.set('Users', userName, userLabel)
+
+            if (os.access(CONFIG_FILE, os.W_OK) == True):
+                f = open(CONFIG_FILE, 'w')
+                self.__config.write(f)
+                f.close()
+                print('The user "' + userName + '" has been added successfully!')
+            else:
+                raise Exception('The configuration could not be written!')
+
+        except Exception as e:
+            print('[Exception] Error while adding user: ' + str(e))
+            return False
+
+        return True
+
+    def removeUser(self, userName):
+        ##Removes user from configuration.
+
+        ## Checks if user is root
+        if (os.geteuid() != 0):
+            print('[Error] You need to have root privileges to remove a user!')
+            return False
+
+        ## Checks if the the user was already added
+        if (self.__config.has_option('Users', userName) == False):
+            print('[Error] The user "' + userName + '" is not added!')
+            return False
+
+        ## Confirmation dialog
+        if (self.__showConfirmationDialog('Are you sure you want to remove the user "' + userName + '"?') == False):
+            print('Removing user canceled.')
+            return False
+
+        try:
+            ## Removes entries from configuration file
+            if (self.__config.remove_option('Users', userName) == True) and (os.access(CONFIG_FILE, os.W_OK) == True):
+                f = open(CONFIG_FILE, 'w')
+                self.__config.write(f)
+                f.close()
+                print('The user "' + userName + '" has been removed successfully!')
+            else:
+                raise Exception('The configuration file could not be written!')
+
+        except Exception as e:
+            print('[Exception] Error while removing user: ' + str(e))
+            return False
+
+        return True
+
+    def checkUser(self, userName, noGui):
+        ##Executes a face recognition check for a given user.
+
+        ## Checks if the the user was already added
+        if (self.__config.has_option('Users', userName) == False):
+            print('[Error] The user "' + userName + '" is not added!')
+            return False
+
+        try:
+            ## Read configuration data
+            userLabel = int(self.__config.get('Users', userName))
+            threshold = int(self.__config.get('Authentication', 'Threshold'))
+            faceRecognizer = PamFaceRecognizer(self.__config.get('Global', 'Camera'))
+
+            print('Recognizing face ...')
+
+            ## Try to predict user
+            for _ in range(30):
+                faces, grayScaleImage = faceRecognizer.detectFaces()
+                face = grayScaleImage
+
+                ## Draw a green rectangle around the faces
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(grayScaleImage, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                    face = face[y:y+h,x:x+w]
+                    break
+
+                ## Show captured image
+                if (noGui == False):
+                    faceRecognizer.showImage(grayScaleImage)
+
+                ## Predict user
+                predict = faceRecognizer.predict(face)
+                print('Predicted user '+ str(predict[0]) +' with confidence '+ str(predict[1]))
+
+                if (predict[1] <= threshold):
+                    break
+
+            cv2.destroyAllWindows()
+
+            ## User found?
+            if ((predict[0] == userLabel) and (predict[1] <= threshold)):
+                print('Face recognized!')
+                print('Check for user "' + userName + '" was successful!')
+            else:
+                raise Exception('Face not recognized!')
+
+        except Exception as e:
+            print('[Exception] Check for user "' + userName + '" failed: ' + str(e))
+            return False
+
+        return True
+
+
+if (__name__ == '__main__'):
+
+    parser = argparse.ArgumentParser(description='PAM Face configuration program')
+
+    parser.add_argument('--add-user', metavar='NAME', help='Adds a new user.')
+    parser.add_argument('--remove-user', metavar='NAME', help='Removes a user.')
+    parser.add_argument('--check-user', metavar='NAME', help='Runs check for an existing user.')
+    parser.add_argument('--version', '-v', action='version', version='PAM Face '+ VERSION, help='Prints version and exits.')
+
+    args = vars(parser.parse_args())
+
+    if (args['add_user']):
+        PamFace().addUser(args['add_user'])
+    elif (args['remove_user']):
+        PamFace().removeUser(args['remove_user'])
+    elif (args['check_user']):
+        PamFace().checkUser(args['check_user'])
+    else:
+        parser.print_help()
